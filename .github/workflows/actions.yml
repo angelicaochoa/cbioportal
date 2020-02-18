@@ -1,0 +1,44 @@
+name: Docker Image CI
+
+on: [push]
+
+jobs:
+
+  build:
+    name: Local cBio Docker Build
+    runs-on: ubuntu-latest
+
+    steps:
+
+    - uses: actions/checkout@v2
+    - name: Build the local cBioPortal Docker image
+      run: 
+        docker build --file docker/web/Dockerfile --tag cbioportal-container:cbio-test-container .
+
+    - uses: actions/checkout@v2
+    - name: Create cBioDB net
+      run: 
+        docker network create cbio-net
+
+    - uses: actions/checkout@v2
+    - name: Run session service containers
+      run:
+        docker run -d --name=mongoDB --net=cbio-net -e MONGO_INITDB_DATABASE=session_service mongo:3.6.6
+
+    - uses: actions/checkout@v2
+    - name: Run session service containers
+      run:
+        docker run -d --name=cbio-session-service --net=cbio-net -e SERVER_PORT=5000 -e JAVA_OPTS="-Dspring.data.mongodb.uri=mongodb://mongoDB:27017/session-service" cbioportal/session-service:latest
+
+    - uses: actions/checkout@v2
+    - name: Run cbioportal web server
+
+      env:
+          DB_HOST: publicdb.cbioportal.org
+          PORT: ${{ job.services.mysql.ports[3306] }}
+          DB_PORTAL_DB_NAME: cgds_public
+          DB_USER: cbio_user
+          DB_PASSWORD: cbio_pass
+          DB_CONNECTION_STRING: jdbc:mysql://publicdb.cbioportal.org:3306/
+      run:
+        docker run -d --restart=always --name=cbioportal-container --net=cbio-net -v $GITHUB_WORKSPACE/src/main/resources/portal.properties:/cbioportal/portal.properties:ro -e JAVA_OPTS='-Xms2g -Xmx4g -Dauthenticate=noauthsessionservice -Dsession.service.url=http://cbio-session-service:5000/api/sessions/my_portal/ -Ddbconnector=dbcp -Ddb.user="$DB_USER" -Ddb.password="$DB_PASSWORD" -Ddb.host="$DB_HOST" -Ddb.portal_db_name="$DB_PORTAL_DB_NAME" -Ddb.connection_string="$DB_CONNECTION_STRING"' -p 8081:8080 cbioportal/cbioportal:latest /bin/sh -c 'java ${JAVA_OPTS} -jar webapp-runner.jar /cbioportal-webapp'
